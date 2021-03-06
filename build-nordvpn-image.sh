@@ -5,9 +5,8 @@ set -o errtrace
 IMAGE_NAME='chrisbouchard/nordvpn'
 GITHUB_REPO='chrisbouchard/nordvpn'
 
-# URL to NordVPN RPM, retrieved from https://nordvpn.com/download
 # TODO: Is there a way we can get the latest URL programmatically?
-NORDVPN_REPO_RPM='https://repo.nordvpn.com/yum/nordvpn/centos/noarch/Packages/n/nordvpn-release-1.0.0-1.noarch.rpm'
+NORDVPN_REPO_DEB_URL='https://repo.nordvpn.com/deb/nordvpn/debian/pool/main/nordvpn-release_1.0.0_all.deb'
 
 IMAGE_VERSION=${IMAGE_VERSION:-latest}
 IMAGE_REGISTRY=${IMAGE_REGISTRY:-docker.io}
@@ -17,11 +16,10 @@ VCS_URL="https://github.com/$GITHUB_REPO"
 VCS_REF=${VCS_REF:-$(git rev-parse HEAD)}
 CREATED_BY=${CREATED_BY:-$(basename "$0")}
 
-BUILD_DIR="$PWD/build"
-DNF_CACHE_DIR="$BUILD_DIR/dnfcache"
-
-BUILDAH_DNF_OPTS=(--volume "$DNF_CACHE_DIR:/var/cache/dnf:z")
 IMAGE_ID="$IMAGE_REGISTRY/$IMAGE_NAME:$IMAGE_VERSION"
+
+BUILD_DIR="$PWD/build"
+NORD_REPO_DEB_FILE="$BUILD_DIR/nordvpn-release.deb"
 
 BOLD=$(tput bold)
 RED=$(tput setaf 1)
@@ -49,24 +47,43 @@ cleanup_container() {
 
 trap 'complain_and_die $?' ERR
 
-step 'Creating build cache directory'
-mkdir -p "$DNF_CACHE_DIR"
+step 'Creating build directory'
+mkdir -p "$BUILD_DIR"
 
 step 'Creating container'
-container=$(buildah from registry.fedoraproject.org/fedora)
+container=$(buildah from docker.io/ubuntu:18.04)
 trap "cleanup_container '$container'" EXIT
 buildah config \
+    --author "$MAINTAINER" \
+    --cmd '' \
+    --created-by "$CREATED_BY" \
+    --entrypoint '["/entrypoint.sh"]' \
     --label maintainer="$MAINTAINER" \
     --label vcs-url="$VCS_URL" \
     --label vcs-ref="$VCS_REF" \
-    --created-by "$CREATED_BY" \
-    --entrypoint '["/usr/sbin/nordvpnd"]' \
+    --volume /run/nordvpn \
+    --volume /run/secrets/nordvpn \
     "$container"
 
+step 'Add Startup Script'
+buildah copy "$container" entrypoint.sh /entrypoint.sh
+
+step 'Downloading NordVPN Repository DEB'
+wget -O "$NORD_REPO_DEB_FILE" "$NORDVPN_REPO_DEB_URL"
+
 step 'Installing NordVPN and Dependencies'
-buildah run --tty "${BUILDAH_DNF_OPTS[@]}" -- "$container" bash -i -c \
-    "dnf install --assumeyes '$NORDVPN_REPO_RPM' && \
-        dnf install --assumeyes procps nordvpn"
+buildah run \
+    --volume "$NORD_REPO_DEB_FILE:/tmp/nordvpn-release.deb:z" \
+    -- \
+    "$container" bash <<EOF
+        ( set -x &&
+            apt-get update &&
+            apt-get install -y /tmp/nordvpn-release.deb ca-certificates &&
+            apt-get update &&
+            apt-get install -y nordvpn systemd
+        ) &&
+        rm -rf /var/lib/apt/lists/*
+EOF
 
 step 'Committing container'
 buildah commit "$container" "$IMAGE_ID"
