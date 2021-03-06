@@ -77,14 +77,14 @@ step 'Installing NordVPN and Dependencies'
 buildah run --tty \
     --volume "$NORD_REPO_RPM_FILE:/tmp/nordvpn-release.rpm:z" \
     -- \
-    "$container" bash -i -c "
-        ( set -x &&
-            rpm --install /tmp/nordvpn-release.rpm &&
-            microdnf update --assumeyes &&
-            microdnf install --assumeyes iproute nordvpn procps-ng systemd &&
-            microdnf clean all
-        ) &&
-        rm -rf /var/cache/yum
+    "$container" bash -i -o errexit -o xtrace -c "
+        # We got this RPM directly from NordVPN's servers, so we're going to trust it. And since microdnf can't install
+        # local RPMs, we'll install it directly.
+        rpm --install --nosignature /tmp/nordvpn-release.rpm
+        microdnf update --assumeyes
+        # Install NordVPN and its implicit dependencies, which aren't installed by default in fedora-minimal.
+        microdnf install --assumeyes iproute nordvpn procps-ng systemd
+        microdnf clean all
     "
 
 step 'Committing container'
