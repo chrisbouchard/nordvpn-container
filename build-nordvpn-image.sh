@@ -6,7 +6,7 @@ IMAGE_NAME='chrisbouchard/nordvpn'
 GITHUB_REPO='chrisbouchard/nordvpn'
 
 # TODO: Is there a way we can get the latest URL programmatically?
-NORDVPN_REPO_DEB_URL='https://repo.nordvpn.com/deb/nordvpn/debian/pool/main/nordvpn-release_1.0.0_all.deb'
+NORDVPN_REPO_RPM_URL='https://repo.nordvpn.com/yum/nordvpn/centos/noarch/Packages/n/nordvpn-release-1.0.0-1.noarch.rpm'
 
 IMAGE_VERSION=${IMAGE_VERSION:-latest}
 IMAGE_REGISTRY=${IMAGE_REGISTRY:-docker.io}
@@ -18,8 +18,10 @@ CREATED_BY=${CREATED_BY:-$(basename "$0")}
 
 IMAGE_ID="$IMAGE_REGISTRY/$IMAGE_NAME:$IMAGE_VERSION"
 
+FEDORA_VERSION=33
+
 BUILD_DIR="$PWD/build"
-NORD_REPO_DEB_FILE="$BUILD_DIR/nordvpn-release.deb"
+NORD_REPO_RPM_FILE="$BUILD_DIR/nordvpn-release.rpm"
 
 BOLD=$(tput bold)
 RED=$(tput setaf 1)
@@ -51,7 +53,7 @@ step 'Creating build directory'
 mkdir -p "$BUILD_DIR"
 
 step 'Creating container'
-container=$(buildah from docker.io/ubuntu:18.04)
+container=$(buildah from "registry.fedoraproject.org/fedora-minimal:$FEDORA_VERSION")
 trap "cleanup_container '$container'" EXIT
 buildah config \
     --author "$MAINTAINER" \
@@ -68,22 +70,22 @@ buildah config \
 step 'Add Startup Script'
 buildah copy "$container" entrypoint.sh /entrypoint.sh
 
-step 'Downloading NordVPN Repository DEB'
-wget -O "$NORD_REPO_DEB_FILE" "$NORDVPN_REPO_DEB_URL"
+step 'Downloading NordVPN Repository RPM'
+wget -O "$NORD_REPO_RPM_FILE" "$NORDVPN_REPO_RPM_URL"
 
 step 'Installing NordVPN and Dependencies'
-buildah run \
-    --volume "$NORD_REPO_DEB_FILE:/tmp/nordvpn-release.deb:z" \
+buildah run --tty \
+    --volume "$NORD_REPO_RPM_FILE:/tmp/nordvpn-release.rpm:z" \
     -- \
-    "$container" bash <<EOF
+    "$container" bash -i -c "
         ( set -x &&
-            apt-get update &&
-            apt-get install -y /tmp/nordvpn-release.deb ca-certificates &&
-            apt-get update &&
-            apt-get install -y nordvpn systemd
+            rpm --install /tmp/nordvpn-release.rpm &&
+            microdnf update --assumeyes &&
+            microdnf install --assumeyes iproute nordvpn procps-ng systemd &&
+            microdnf clean all
         ) &&
-        rm -rf /var/lib/apt/lists/*
-EOF
+        rm -rf /var/cache/yum
+    "
 
 step 'Committing container'
 buildah commit "$container" "$IMAGE_ID"
